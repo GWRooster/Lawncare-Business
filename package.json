@@ -1,0 +1,212 @@
+'use client'
+import { useState, useEffect } from 'react'
+import { createClient } from '@/lib/supabase'
+
+const supabase = createClient()
+
+export default function Dashboard() {
+  const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [email, setEmail] = useState('')
+  const [sent, setSent] = useState(false)
+  const [bookings, setBookings] = useState<any[]>([])
+  const [availability, setAvailability] = useState<any[]>([])
+  const [newSlot, setNewSlot] = useState({ date: '', start_time: '', end_time: '' })
+  const [addingSlot, setAddingSlot] = useState(false)
+  const [teamMembers, setTeamMembers] = useState<any[]>([])
+  const [myMember, setMyMember] = useState<any>(null)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setLoading(false)
+    })
+    supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+  }, [])
+
+  useEffect(() => {
+    if (!session) return
+    async function loadData() {
+      const { data: members } = await supabase.from('team_members').select('*')
+      setTeamMembers(members || [])
+      const me = members?.find((m: any) => m.email === session.user.email)
+      setMyMember(me)
+
+      const { data: bkgs } = await supabase
+        .from('bookings')
+        .select('*, services(name, price), availability(date, start_time, end_time, team_members(name))')
+        .order('created_at', { ascending: false })
+      setBookings(bkgs || [])
+
+      const { data: avail } = await supabase
+        .from('availability')
+        .select('*, team_members(name)')
+        .gte('date', new Date().toISOString().split('T')[0])
+        .order('date')
+      setAvailability(avail || [])
+    }
+    loadData()
+  }, [session])
+
+  async function sendMagicLink() {
+    await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/dashboard` } })
+    setSent(true)
+  }
+
+  async function addSlot() {
+    if (!myMember || !newSlot.date || !newSlot.start_time || !newSlot.end_time) return
+    setAddingSlot(true)
+    await supabase.from('availability').insert({ ...newSlot, team_member_id: myMember.id })
+    const { data } = await supabase.from('availability').select('*, team_members(name)').gte('date', new Date().toISOString().split('T')[0]).order('date')
+    setAvailability(data || [])
+    setNewSlot({ date: '', start_time: '', end_time: '' })
+    setAddingSlot(false)
+  }
+
+  async function deleteSlot(id: string) {
+    await supabase.from('availability').delete().eq('id', id)
+    setAvailability(prev => prev.filter(a => a.id !== id))
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut()
+    setSession(null)
+  }
+
+  const inputStyle = { padding: '10px 12px', borderRadius: 6, border: '1.5px solid #ddd', fontSize: 14, fontFamily: 'Inter, sans-serif', background: '#fff' }
+
+  if (loading) return <div style={{ padding: 40, fontFamily: 'Inter, sans-serif', color: '#999' }}>Loading...</div>
+
+  if (!session) return (
+    <main style={{ minHeight: '100vh', background: 'var(--dusk)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter, sans-serif' }}>
+      <div style={{ background: '#fff', borderRadius: 12, padding: '48px 40px', width: '100%', maxWidth: 400, textAlign: 'center' }}>
+        <p style={{ fontFamily: 'Bebas Neue', fontSize: 32, color: 'var(--dusk)', marginBottom: 8 }}>Team Login</p>
+        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 28 }}>Enter your email — we'll send a magic link.</p>
+        {sent ? (
+          <p style={{ color: 'var(--ember)', fontWeight: 600 }}>Check your email for the link!</p>
+        ) : (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <input style={{ ...inputStyle, width: '100%' }} type="email" placeholder="your@email.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <button onClick={sendMagicLink} className="btn-primary" style={{ width: '100%' }}>Send Magic Link</button>
+          </div>
+        )}
+      </div>
+    </main>
+  )
+
+  const upcoming = bookings.filter(b => b.availability?.date >= new Date().toISOString().split('T')[0])
+  const past = bookings.filter(b => b.availability?.date < new Date().toISOString().split('T')[0])
+
+  return (
+    <main style={{ fontFamily: 'Inter, sans-serif', minHeight: '100vh', background: '#f7f5f2' }}>
+      <nav style={{ background: 'var(--dusk)', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontFamily: 'Bebas Neue', fontSize: 22, color: 'var(--gold)' }}>Local Lawncare — Dashboard</span>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <span style={{ color: 'var(--muted)', fontSize: 13 }}>{session.user.email}</span>
+          <button onClick={signOut} style={{ background: 'none', border: '1px solid #444', color: '#aaa', padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>Sign out</button>
+        </div>
+      </nav>
+
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px' }}>
+
+        {/* Stats */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 40 }}>
+          {[
+            { label: 'Upcoming jobs', value: upcoming.length },
+            { label: 'Total bookings', value: bookings.length },
+            { label: 'Open slots', value: availability.filter(a => !a.booked).length },
+            { label: 'Revenue (upcoming)', value: `$${upcoming.reduce((s: number, b: any) => s + (b.services?.price || 0), 0)}` },
+          ].map(stat => (
+            <div key={stat.label} style={{ background: '#fff', borderRadius: 8, padding: '20px 24px', border: '1px solid #e8e8e8' }}>
+              <p style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>{stat.label}</p>
+              <p style={{ fontSize: 32, fontFamily: 'Bebas Neue', color: 'var(--dusk)' }}>{stat.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+
+          {/* Upcoming bookings */}
+          <div>
+            <h2 style={{ fontFamily: 'Bebas Neue', fontSize: 28, color: 'var(--dusk)', marginBottom: 20 }}>Upcoming Jobs</h2>
+            <div style={{ display: 'grid', gap: 12 }}>
+              {upcoming.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 14 }}>No upcoming bookings yet.</p>}
+              {upcoming.map(b => (
+                <div key={b.id} style={{ background: '#fff', borderRadius: 8, padding: '18px 20px', border: '1px solid #e8e8e8', borderLeft: '3px solid var(--ember)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <p style={{ fontWeight: 600, color: 'var(--dusk)' }}>{b.client_name}</p>
+                    <span style={{ background: '#fff5f0', color: 'var(--ember)', fontSize: 12, fontWeight: 600, padding: '2px 10px', borderRadius: 20 }}>${b.services?.price}</span>
+                  </div>
+                  <p style={{ fontSize: 13, color: 'var(--muted)' }}>{b.client_address}</p>
+                  <p style={{ fontSize: 13, color: 'var(--ember)', marginTop: 4 }}>
+                    {b.availability?.date && new Date(b.availability.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {b.availability?.start_time?.slice(0, 5)}
+                  </p>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{b.services?.name}</p>
+                  {b.notes && <p style={{ fontSize: 12, color: '#999', marginTop: 4, fontStyle: 'italic' }}>"{b.notes}"</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Availability management */}
+          <div>
+            <h2 style={{ fontFamily: 'Bebas Neue', fontSize: 28, color: 'var(--dusk)', marginBottom: 20 }}>Your Open Slots</h2>
+
+            {/* Add new slot */}
+            <div style={{ background: '#fff', borderRadius: 8, padding: '20px', border: '1px solid #e8e8e8', marginBottom: 20 }}>
+              <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--dusk)', marginBottom: 14 }}>Add availability</p>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <input type="date" style={inputStyle} value={newSlot.date} onChange={e => setNewSlot({ ...newSlot, date: e.target.value })} min={new Date().toISOString().split('T')[0]} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <input type="time" style={inputStyle} value={newSlot.start_time} onChange={e => setNewSlot({ ...newSlot, start_time: e.target.value })} />
+                  <input type="time" style={inputStyle} value={newSlot.end_time} onChange={e => setNewSlot({ ...newSlot, end_time: e.target.value })} />
+                </div>
+                <button onClick={addSlot} disabled={addingSlot} className="btn-primary" style={{ width: '100%' }}>
+                  {addingSlot ? 'Adding...' : '+ Add Slot'}
+                </button>
+              </div>
+            </div>
+
+            {/* Slot list */}
+            <div style={{ display: 'grid', gap: 8 }}>
+              {availability.length === 0 && <p style={{ color: 'var(--muted)', fontSize: 14 }}>No upcoming slots yet.</p>}
+              {availability.map(slot => (
+                <div key={slot.id} style={{
+                  background: '#fff', borderRadius: 8, padding: '14px 18px', border: '1px solid #e8e8e8',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  opacity: slot.booked ? 0.5 : 1
+                }}>
+                  <div>
+                    <p style={{ fontWeight: 500, fontSize: 13, color: 'var(--dusk)' }}>
+                      {new Date(slot.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {slot.start_time?.slice(0, 5)}–{slot.end_time?.slice(0, 5)}
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--muted)' }}>{slot.team_members?.name} · {slot.booked ? '🟠 Booked' : '🟢 Open'}</p>
+                  </div>
+                  {!slot.booked && (
+                    <button onClick={() => deleteSlot(slot.id)} style={{ background: 'none', border: 'none', color: '#ccc', cursor: 'pointer', fontSize: 18 }}>×</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Past jobs */}
+        {past.length > 0 && (
+          <div style={{ marginTop: 48 }}>
+            <h2 style={{ fontFamily: 'Bebas Neue', fontSize: 28, color: 'var(--dusk)', marginBottom: 20 }}>Past Jobs</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+              {past.map(b => (
+                <div key={b.id} style={{ background: '#fff', borderRadius: 8, padding: '16px 18px', border: '1px solid #e8e8e8', opacity: 0.7 }}>
+                  <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--dusk)' }}>{b.client_name}</p>
+                  <p style={{ fontSize: 13, color: 'var(--muted)' }}>{b.services?.name} · ${b.services?.price}</p>
+                  <p style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>{b.availability?.date}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}

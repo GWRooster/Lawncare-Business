@@ -1,0 +1,147 @@
+'use client'
+import { useState } from 'react'
+import { createClient } from '@/lib/supabase'
+
+const supabase = createClient()
+
+interface Props {
+  services: any[]
+  availability: any[]
+  onBooked: () => void
+}
+
+export default function BookingWidget({ services, availability, onBooked }: Props) {
+  const [step, setStep] = useState(1)
+  const [selectedService, setSelectedService] = useState<any>(null)
+  const [selectedSlot, setSelectedSlot] = useState<any>(null)
+  const [form, setForm] = useState({ name: '', email: '', phone: '', address: '', notes: '' })
+  const [loading, setLoading] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit() {
+    if (!form.name || !form.address) { setError('Name and address are required.'); return }
+    setLoading(true)
+    setError('')
+    const { error: bookErr } = await supabase.from('bookings').insert({
+      availability_id: selectedSlot?.id,
+      service_id: selectedService?.id,
+      client_name: form.name,
+      client_email: form.email,
+      client_phone: form.phone,
+      client_address: form.address,
+      notes: form.notes,
+    })
+    if (!bookErr && selectedSlot) {
+      await supabase.from('availability').update({ booked: true }).eq('id', selectedSlot.id)
+    }
+    setLoading(false)
+    if (bookErr) { setError('Something went wrong. Please try again.'); return }
+    setDone(true)
+    onBooked()
+  }
+
+  if (done) return (
+    <div style={{ background: 'var(--dusk)', borderRadius: 12, padding: '48px 40px', textAlign: 'center', maxWidth: 560 }}>
+      <p style={{ fontSize: 48, fontFamily: 'Bebas Neue', color: 'var(--gold)', marginBottom: 12 }}>You're Booked!</p>
+      <p style={{ color: 'var(--cream)', fontSize: 16 }}>
+        {selectedService?.name} on {new Date(selectedSlot?.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} at {selectedSlot?.start_time?.slice(0, 5)}.
+      </p>
+      <p style={{ color: 'var(--muted)', marginTop: 12, fontSize: 14 }}>We'll see you then, {form.name.split(' ')[0]}.</p>
+    </div>
+  )
+
+  const inputStyle = {
+    width: '100%', padding: '12px 14px', borderRadius: 6,
+    border: '1.5px solid #ddd', fontSize: 15, fontFamily: 'Inter, sans-serif',
+    outline: 'none', background: '#fff'
+  }
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+      {/* Step indicators */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 36 }}>
+        {['Service', 'Time', 'Details'].map((label, i) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: step > i + 1 ? 'var(--ember)' : step === i + 1 ? 'var(--dusk)' : '#e8e0d8',
+              color: step >= i + 1 ? '#fff' : 'var(--muted)', fontSize: 13, fontWeight: 600
+            }}>{i + 1}</div>
+            <span style={{ fontSize: 13, fontWeight: step === i + 1 ? 600 : 400, color: step === i + 1 ? 'var(--dusk)' : 'var(--muted)' }}>{label}</span>
+            {i < 2 && <div style={{ width: 32, height: 1, background: '#ddd', marginLeft: 4 }} />}
+          </div>
+        ))}
+      </div>
+
+      {/* Step 1 — Service */}
+      {step === 1 && (
+        <div>
+          <p style={{ fontWeight: 600, marginBottom: 16, color: 'var(--dusk)' }}>What service do you need?</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            {services.map(svc => (
+              <button key={svc.id} onClick={() => { setSelectedService(svc); setStep(2) }}
+                style={{
+                  padding: '20px 18px', borderRadius: 8, textAlign: 'left', cursor: 'pointer',
+                  border: selectedService?.id === svc.id ? '2px solid var(--ember)' : '1.5px solid #ddd',
+                  background: selectedService?.id === svc.id ? '#fff5f0' : '#fff',
+                  transition: 'all 0.15s'
+                }}>
+                <p style={{ fontWeight: 600, fontSize: 14, color: 'var(--dusk)' }}>{svc.name}</p>
+                <p style={{ fontSize: 24, fontFamily: 'Bebas Neue', color: 'var(--ember)', marginTop: 6 }}>${svc.price}</p>
+                {svc.description && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{svc.description}</p>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Step 2 — Time slot */}
+      {step === 2 && (
+        <div>
+          <p style={{ fontWeight: 600, marginBottom: 16, color: 'var(--dusk)' }}>Pick a time</p>
+          {availability.length === 0 ? (
+            <p style={{ color: 'var(--muted)', fontSize: 15 }}>No open slots right now — check back soon!</p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+              {availability.map(slot => (
+                <button key={slot.id} onClick={() => { setSelectedSlot(slot); setStep(3) }}
+                  style={{
+                    padding: '16px 18px', borderRadius: 8, textAlign: 'left', cursor: 'pointer',
+                    border: selectedSlot?.id === slot.id ? '2px solid var(--ember)' : '1.5px solid #ddd',
+                    background: selectedSlot?.id === slot.id ? '#fff5f0' : '#fff',
+                  }}>
+                  <p style={{ fontWeight: 600, fontSize: 13, color: 'var(--dusk)' }}>
+                    {new Date(slot.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </p>
+                  <p style={{ fontSize: 13, color: 'var(--ember)', marginTop: 4 }}>{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</p>
+                  <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{slot.team_members?.name}</p>
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={() => setStep(1)} style={{ marginTop: 24, background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 14 }}>← Back</button>
+        </div>
+      )}
+
+      {/* Step 3 — Details */}
+      {step === 3 && (
+        <div style={{ display: 'grid', gap: 16, maxWidth: 480 }}>
+          <p style={{ fontWeight: 600, color: 'var(--dusk)' }}>Your info</p>
+          <input style={inputStyle} placeholder="Full name *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <input style={inputStyle} placeholder="Address *" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
+          <input style={inputStyle} placeholder="Phone number" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+          <input style={inputStyle} placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 80 }} placeholder="Any notes for us?" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
+          {error && <p style={{ color: 'var(--crimson)', fontSize: 14 }}>{error}</p>}
+          <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+            <button onClick={() => setStep(2)} style={{ background: 'none', border: '1.5px solid #ddd', padding: '12px 24px', borderRadius: 6, cursor: 'pointer', fontFamily: 'Inter', fontSize: 14 }}>← Back</button>
+            <button onClick={handleSubmit} disabled={loading} className="btn-primary" style={{ flex: 1 }}>
+              {loading ? 'Booking...' : 'Confirm Booking'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
